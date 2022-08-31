@@ -90,7 +90,8 @@ class GoogleDriveHelper:
     def __authorize(self):
         creds = None
         if USE_SERVICE_ACCOUNTS:
-            self.__service_account_index = randrange(SERVICE_ACCOUNTS_NUMBER)
+            if self.__sa_count == 0:
+                self.__service_account_index = randrange(SERVICE_ACCOUNTS_NUMBER)
             LOGGER.info(f"Authorizing with {self.__service_account_index}.json file")
             creds = service_account.Credentials.from_service_account_file(
                 f'accounts/{self.__service_account_index}.json', scopes=self.__OAUTH_SCOPE)
