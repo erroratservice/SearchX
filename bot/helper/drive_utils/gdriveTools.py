@@ -43,7 +43,6 @@ class GoogleDriveHelper:
         self.__path = path
         self.__size = size
         self.__listener = listener
-        self.__service = self.__authorize()
         self.__total_bytes = 0
         self.__total_folders = 0
         self.__total_files = 0
@@ -66,6 +65,7 @@ class GoogleDriveHelper:
         self.response = {}
         self.telegraph_path = []
         self.telegraph_content = []
+        self.__service = self.__authorize()
 
     def speed(self):
         """
