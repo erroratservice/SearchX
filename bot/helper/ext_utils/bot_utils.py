@@ -1,9 +1,12 @@
+import os
 import re
+import requests
 import threading
 import time
 
 from html import escape
 from psutil import virtual_memory, cpu_percent, disk_usage
+from requests_toolbelt import MultipartEncoder
 
 from bot.helper.telegram_helper.bot_commands import BotCommands
 from bot import botStartTime, DOWNLOAD_DIR, download_dict, download_dict_lock
@@ -16,7 +19,7 @@ class TaskStatus:
     STATUS_CLONING = "Cloning"
     STATUS_DOWNLOADING = "Downloading"
     STATUS_UPLOADING = "Uploading"
-    STATUS_ARCHIVING = "Archiving"
+    STATUS_COMPRESSING = "Compressing"
     STATUS_EXTRACTING = "Extracting"
 
 class SetInterval:
@@ -30,8 +33,8 @@ class SetInterval:
     def __setInterval(self):
         nextTime = time.time() + self.interval
         while not self.stopEvent.wait(nextTime - time.time()):
-            nextTime += self.interval
             self.action()
+            nextTime = time.time() + self.interval
 
     def cancel(self):
         self.stopEvent.set()
@@ -51,8 +54,7 @@ def get_progress_bar_string(status):
     cFull = p // 8
     p_str = '⬤' * cFull
     p_str += '○' * (12 - cFull)
-    p_str = f"「{p_str}」"
-    return p_str
+    return f"「{p_str}」"
 
 def get_readable_message():
     with download_dict_lock:
@@ -116,16 +118,43 @@ def get_readable_time(seconds: int) -> str:
     result += f'{seconds}s'
     return result
 
+def slowpics_collection(path):
+    img_list = os.listdir(path)
+    data = {
+        "collectionName": "SearchX",
+        "hentai": "false",
+        "optimizeImages": "false",
+        "public": "false"
+    }
+    for i in range(0, len(img_list)):
+        data[f"images[{i}].name"] = img_list[i]
+        data[f"images[{i}].file"] = (img_list[i], open(f"{path}/{img_list[i]}", 'rb'), 'image/png')
+    with requests.Session() as client:
+        client.get('https://slow.pics/api/collection')
+        files = MultipartEncoder(data)
+        length = str(files.len)
+        headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Content-Length": length,
+            "Content-Type": files.content_type,
+            "Origin": "https://slow.pics/",
+            "Referer": "https://slow.pics/collection",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.88 Safari/537.36",
+            "X-XSRF-TOKEN": client.cookies.get_dict()["XSRF-TOKEN"]
+        }
+        response = client.post("https://slow.pics/api/collection", data=files, headers=headers)
+        return f"https://slow.pics/c/{response.text}"
+
 def is_url(url: str):
     url = re.findall(URL_REGEX, url)
     return bool(url)
 
 def is_gdrive_link(url: str):
     return "drive.google.com" in url
-
-def is_appdrive_link(url: str):
-    url = re.match(r'https?://appdrive\.\S+', url)
-    return bool(url)
 
 def is_gdtot_link(url: str):
     url = re.match(r'https?://.+\.gdtot\.\S+', url)

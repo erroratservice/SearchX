@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:20.04
 
 WORKDIR /usr/src/app
 SHELL ["/bin/bash", "-c"]
@@ -12,7 +12,7 @@ ENV LANGUAGE=en_US:en \
 
 RUN apt-get -qq update && apt-get -qq install -y \
     python3 python3-pip locales libmagic-dev \
-    p7zip-full p7zip-rar unzip && \
+    p7zip-full p7zip-rar unzip mediainfo ffmpeg && \
     locale-gen en_US.UTF-8
 
 COPY requirements.txt .

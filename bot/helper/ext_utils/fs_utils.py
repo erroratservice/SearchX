@@ -5,7 +5,7 @@ import shutil
 import sys
 
 from bot import LOGGER, DOWNLOAD_DIR
-from bot.helper.ext_utils.exceptions import CompressExceptionHandler
+from bot.helper.ext_utils.exceptions import ArchiveExceptionHandler
 
 ARCH_EXT = [".tar.bz2", ".tar.gz", ".bz2", ".gz", ".tar.xz", ".tar", ".tbz2", ".tgz", ".lzma2",
             ".zip", ".7z", ".z", ".rar", ".iso", ".wim", ".cab", ".apm", ".arj", ".chm",
@@ -48,7 +48,7 @@ def clean_all():
 
 def exit_clean_up(signal, frame):
     try:
-        LOGGER.info("Cleaning up the downloads and exiting")
+        LOGGER.info("Cleaning up and exiting")
         clean_all()
         sys.exit(0)
     except KeyboardInterrupt:
@@ -66,12 +66,11 @@ def get_path_size(path: str):
     return total_size
 
 def get_base_name(orig_path: str):
-    ext = [ext for ext in ARCH_EXT if orig_path.lower().endswith(ext)]
-    if len(ext) > 0:
+    if ext:= [ext for ext in ARCH_EXT if orig_path.lower().endswith(ext)]:
         ext = ext[0]
-        return re.split(ext + '$', orig_path, maxsplit=1, flags=re.I)[0]
+        return re.split(f'{ext}$', orig_path, maxsplit=1, flags=re.I)[0]
     else:
-        raise CompressExceptionHandler('Unsupported file format')
+        raise ArchiveExceptionHandler("Unsupported archive file")
 
 def get_mime_type(file_path):
     mime = magic.Magic(mime=True)

@@ -1,33 +1,32 @@
 import os
 import re
 import requests
-import shutil
 import subprocess
 import threading
 
 from html import escape
 from telegram.ext import CommandHandler
 
-from bot import LOGGER, dispatcher, DOWNLOAD_DIR, Interval, INDEX_URL, download_dict, download_dict_lock
-from bot.helper.download_utils.ddl_generator import appdrive, gdtot
+from bot import LOGGER, dispatcher, DOWNLOAD_DIR, Interval, INDEX_URL, download_dict, download_dict_lock, status_reply_dict_lock
+from bot.helper.download_utils.ddl_generator import gdtot
 from bot.helper.download_utils.gd_downloader import add_gd_download
 from bot.helper.drive_utils.gdriveTools import GoogleDriveHelper
-from bot.helper.ext_utils.bot_utils import is_gdrive_link, is_appdrive_link, is_gdtot_link
-from bot.helper.ext_utils.exceptions import CompressExceptionHandler, DDLExceptionHandler
+from bot.helper.ext_utils.bot_utils import is_gdrive_link, is_gdtot_link
+from bot.helper.ext_utils.exceptions import ArchiveExceptionHandler, DDLExceptionHandler
 from bot.helper.ext_utils.fs_utils import clean_download, clean_target, get_base_name, get_path_size
-from bot.helper.status_utils.archive_status import ArchiveStatus
+from bot.helper.status_utils.compress_status import CompressStatus
 from bot.helper.status_utils.extract_status import ExtractStatus
 from bot.helper.status_utils.upload_status import UploadStatus
 from bot.helper.telegram_helper.bot_commands import BotCommands
 from bot.helper.telegram_helper.filters import CustomFilters
 from bot.helper.telegram_helper.message_utils import sendMessage, deleteMessage, delete_all_messages, update_all_messages
 
-class CompressListener:
-    def __init__(self, bot, message, is_archive=False, is_extract=False, pswd=None):
+class ArchiveListener:
+    def __init__(self, bot, message, is_compress=False, is_extract=False, pswd=None):
         self.bot = bot
         self.message = message
         self.uid = message.message_id
-        self.is_archive = is_archive
+        self.is_compress = is_compress
         self.is_extract = is_extract
         self.pswd = pswd
         self.dir = f'{DOWNLOAD_DIR}{self.uid}'
@@ -35,8 +34,9 @@ class CompressListener:
 
     def clean(self):
         try:
-            Interval[0].cancel()
-            Interval.clear()
+            with status_reply_dict_lock:
+                Interval[0].cancel()
+                Interval.clear()
             delete_all_messages()
         except:
             pass
@@ -46,13 +46,15 @@ class CompressListener:
             download = download_dict[self.uid]
             name = str(download.name()).replace('/', '')
             gid = download.gid()
-        m_path = f'{self.dir}/{name}'
+        if name == 'None' or not os.path.exists(f'{self.dir}/{name}'):
+            name = os.listdir(self.dir)[-1]
+        m_path = f"{self.dir}/{name}"
         size = get_path_size(m_path)
-        if self.is_archive:
+        if self.is_compress:
             path = f"{m_path}.zip"
             with download_dict_lock:
-                download_dict[self.uid] = ArchiveStatus(name, size, gid, self)
-            LOGGER.info(f"Archiving: {name}")
+                download_dict[self.uid] = CompressStatus(name, size, gid, self)
+            LOGGER.info(f"Compressing: {name}")
             if self.pswd is not None:
                 self.suproc = subprocess.Popen(["7z", "a", "-mx=0", f"-p{self.pswd}", path, m_path])
             else:
@@ -107,8 +109,8 @@ class CompressListener:
                     else:
                         LOGGER.error("Failed to extract the archive")
                         path = m_path
-            except CompressExceptionHandler as err:
-                LOGGER.info(err)
+            except ArchiveExceptionHandler as err:
+                LOGGER.error(err)
                 path = m_path
         else:
             path = m_path
@@ -126,7 +128,7 @@ class CompressListener:
     def onUploadComplete(self, link: str, size, files, folders, typ, name):
         msg = f'<b>Name:</b> <code>{escape(name)}</code>'
         msg += f'\n<b>Size:</b> {size}'
-        msg += f'\n<b>Type: </b>{typ}'
+        msg += f'\n<b>Type:</b> {typ}'
         if typ == "Folder":
             msg += f'\n<b>SubFolders:</b> {folders}'
             msg += f'\n<b>Files:</b> {files}'
@@ -142,10 +144,8 @@ class CompressListener:
         sendMessage(msg, self.bot, self.message)
         clean_download(self.dir)
         with download_dict_lock:
-            try:
+            if self.uid in download_dict.keys():
                 del download_dict[self.uid]
-            except Exception as e:
-                LOGGER.error(str(e))
             count = len(download_dict)
         if count == 0:
             self.clean()
@@ -156,10 +156,8 @@ class CompressListener:
         error = error.replace('<', '').replace('>', '')
         clean_download(self.dir)
         with download_dict_lock:
-            try:
+            if self.uid in download_dict.keys():
                 del download_dict[self.uid]
-            except Exception as e:
-                LOGGER.error(str(e))
             count = len(download_dict)
         sendMessage(error, self.bot, self.message)
         if count == 0:
@@ -171,10 +169,8 @@ class CompressListener:
         error = error.replace('<', '').replace('>', '')
         clean_download(self.dir)
         with download_dict_lock:
-            try:
+            if self.uid in download_dict.keys():
                 del download_dict[self.uid]
-            except Exception as e:
-                LOGGER.error(str(e))
             count = len(download_dict)
         sendMessage(error, self.bot, self.message)
         if count == 0:
@@ -182,71 +178,62 @@ class CompressListener:
         else:
             update_all_messages()
 
-def _compress(bot, message, is_archive=False, is_extract=False, pswd=None):
+def _archive(bot, message, is_compress=False, is_extract=False):
     mesg = message.text.split('\n')
     message_args = mesg[0].split(maxsplit=1)
-    name_arg = mesg[0].split('|', maxsplit=1)
-    is_appdrive = False
     is_gdtot = False
-    appdict = ''
+    link = ''
     if len(message_args) > 1:
         link = message_args[1].strip()
-        if link.startswith("pswd:"):
+        if link.startswith(('|', 'pswd:')):
             link = ''
-    else:
-        link = ''
-    if len(name_arg) > 1:
-        name = name_arg[1]
-        name = name.split(' pswd:')[0]
-        name = name.strip()
+    name = mesg[0].split('|', maxsplit=1)
+    if len(name) > 1:
+        if 'pswd:' in name[0]:
+            name = ''
+        else:
+            name = name[1].split('pswd:')[0].strip()
     else:
         name = ''
-    link = re.split(r"pswd:|\|", link)[0]
-    link = link.strip()
-    pswd_arg = mesg[0].split(' pswd: ')
-    if len(pswd_arg) > 1:
-        pswd = pswd_arg[1]
-    else:
-        pswd = None
+    pswd = mesg[0].split(' pswd: ')
+    pswd = pswd[1] if len(pswd) > 1 else None
+    if link != '':
+        link = re.split(r'pswd:|\|', link)[0]
+        link = link.strip()
     reply_to = message.reply_to_message
     if reply_to is not None:
         link = reply_to.text.split(maxsplit=1)[0].strip()
-    is_appdrive = is_appdrive_link(link)
     is_gdtot = is_gdtot_link(link)
-    if any([is_appdrive, is_gdtot]):
+    if is_gdtot:
         msg = sendMessage(f"<b>Processing:</b> <code>{link}</code>", bot, message)
         LOGGER.info(f"Processing: {link}")
         try:
-            if is_appdrive:
-                appdict = appdrive(link)
-                link = appdict.get('gdrive_link')
-            if is_gdtot:
-                link = gdtot(link)
+            link = gdtot(link)
             deleteMessage(bot, msg)
-        except DDLExceptionHandler as e:
+        except DDLExceptionHandler as err:
             deleteMessage(bot, msg)
-            LOGGER.error(e)
-            return sendMessage(str(e), bot, message)
-    listener = CompressListener(bot, message, is_archive, is_extract, pswd)
+            LOGGER.error(err)
+            return sendMessage(str(err), bot, message)
+    listener = ArchiveListener(bot, message, is_compress, is_extract, pswd)
     if is_gdrive_link(link):
-        threading.Thread(target=add_gd_download, args=(link, f'{DOWNLOAD_DIR}{listener.uid}', listener, name, is_appdrive, appdict, is_gdtot)).start()
+        threading.Thread(target=add_gd_download, args=(link, f'{DOWNLOAD_DIR}{listener.uid}', listener, name, is_gdtot)).start()
     else:
         help_msg = '<b><u>Instructions</u></b>\nSend a link along with command'
-        help_msg += '\n\n<b><u>Supported Sites</u></b>\n• Google Drive\n• AppDrive\n• GDToT'
+        help_msg += '\n\n<b><u>Supported Sites</u></b>\n• Google Drive\n• GDToT'
         help_msg += '\n\n<b><u>Set Custom Name</u></b>\nAdd "<code>|customname</code>" after the link'
         help_msg += '\n\n<b><u>Set Password</u></b>\nAdd "<code>pswd: xxx</code>" after the link'
         sendMessage(help_msg, bot, message)
 
 
-def archive_data(update, context):
-    _compress(context.bot, update.message, is_archive=True)
+def compress_data(update, context):
+    _archive(context.bot, update.message, is_compress=True)
 
 def extract_data(update, context):
-    _compress(context.bot, update.message, is_extract=True)
+    _archive(context.bot, update.message, is_extract=True)
 
-archive_handler = CommandHandler(BotCommands.ArchiveCommand, archive_data,
-                                 filters=CustomFilters.authorized_chat | CustomFilters.authorized_user, run_async=True)
+compress_handler = CommandHandler(BotCommands.CompressCommand, compress_data,
+                                  filters=CustomFilters.authorized_user | CustomFilters.authorized_chat)
 extract_handler = CommandHandler(BotCommands.ExtractCommand, extract_data,
-                                 filters=CustomFilters.authorized_chat | CustomFilters.authorized_user, run_async=True)
-dispatcher.add_handler(archive_handler)
+                                 filters=CustomFilters.authorized_user | CustomFilters.authorized_chat)
+dispatcher.add_handler(compress_handler)
 dispatcher.add_handler(extract_handler)

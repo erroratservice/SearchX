@@ -20,9 +20,9 @@ def list_drive(update, context):
         gd = GoogleDriveHelper()
         try:
             msg, button = gd.drive_list(query)
-        except Exception as e:
+        except Exception as err:
             msg, button = "Internal error", None
-            LOGGER.exception(e)
+            LOGGER.error(err)
         editMessage(msg, reply, button)
     else:
         help_msg = '<b><u>Instructions</u></b>\nSend a Query along with command'
@@ -31,5 +31,5 @@ def list_drive(update, context):
         sendMessage(help_msg, context.bot, update.message)
 
 list_handler = CommandHandler(BotCommands.ListCommand, list_drive,
-                              filters=CustomFilters.authorized_chat | CustomFilters.authorized_user, run_async=True)
+                              filters=CustomFilters.authorized_user | CustomFilters.authorized_chat)
 dispatcher.add_handler(list_handler)
